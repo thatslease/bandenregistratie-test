@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#111827">
+<meta name="apple-mobile-web-app-title" content="Banden">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<title>Bandenregistratie</title>
+<style>
+*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f3f4f6;color:#111827}
+header{background:#111827;color:white;padding:18px 16px 16px;position:sticky;top:0;z-index:5}
+h1{font-size:22px;margin:0 0 4px}.sub{font-size:13px;opacity:.75}
+main{max-width:650px;margin:auto;padding:14px 14px 90px}
+.card{background:white;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px #0001}
+label{display:block;font-size:13px;font-weight:600;margin:0 0 6px}
+input,select{width:100%;font-size:17px;padding:12px;border:1px solid #d1d5db;border-radius:11px;background:white}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full{grid-column:1/-1}
+button{border:0;border-radius:12px;padding:13px 15px;font-size:16px;font-weight:650;cursor:pointer}
+.primary{background:#111827;color:white;width:100%}.secondary{background:#e5e7eb;color:#111827}
+.danger{background:#fee2e2;color:#991b1b}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.count{font-size:13px;color:#6b7280;margin-top:8px}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:8px 5px;border-bottom:1px solid #e5e7eb;white-space:nowrap}th{font-weight:700}
+.small{font-size:12px;color:#6b7280}.hidden{display:none}
+.photo{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:10px}
+.toast{position:fixed;bottom:18px;left:14px;right:14px;background:#111827;color:white;padding:13px;border-radius:12px;text-align:center;display:none;z-index:20}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+<header><h1>🛞 Bandenregistratie</h1><div class="sub">v4.1 webapp &middot; DOT · merk · maat · kenteken · profiel</div></header>
+<main>
+<section class="card small" role="note">
+  <strong>Testversie: opslag op dit apparaat.</strong>
+  Geen centrale voorraad of automatische back-up. Foto's worden niet bewaard.
+  Exporteer registraties regelmatig met Excel/CSV. Voor het openen en scannen is internet nodig.
+</section>
+<section class="card">
+  <div class="grid">
+    <div class="full"><label for="stockType">Voorraadtype</label>
+      <select id="stockType" onchange="togglePlate()">
+        <option value="Vrije voorraad">📦 Vrije voorraad</option>
+        <option value="Aan voertuig gekoppeld">🚗 Aan voertuig gekoppeld</option>
+      </select>
+    </div>
+    <div id="plateWrap" class="full hidden"><label for="plate">Kenteken (optioneel bij vrije voorraad)</label><input id="plate" placeholder="bijv. 12-ABC-3" autocapitalize="characters"></div>
+    <div><label for="position">Positie</label><select id="position"><option>LV</option><option>RV</option><option>LA</option><option>RA</option><option>Reserve</option><option>—</option></select></div>
+    <div><label for="season">Seizoen</label><select id="season"><option value="Zomer">☀️ Zomer</option><option value="Winter">❄️ Winter</option><option value="All-season">🌦️ All-season</option></select></div>
+    <div><label for="location">Locatie</label><input id="location" placeholder="bijv. Alphen"></div>
+    <div><label for="shelf">Rek / vak</label><input id="shelf" placeholder="bijv. Rek 12 / Vak B"></div>
+    <div><label for="status">Status</label><select id="status"><option>Vrije voorraad</option><option>Gereserveerd</option><option>Onderweg</option><option>Bij bandenleverancier</option><option>Gemonteerd</option><option>Afgevoerd</option></select></div>
+    <div><label for="setId">Set-ID (optioneel)</label><input id="setId" placeholder="bijv. SET-001245"></div>
+    <div><label for="tread">Profiel (mm)</label><input id="tread" type="number" inputmode="decimal" step="0.01" placeholder="bijv. 5,38"></div>
+    <div><label for="brand">Merk</label><input id="brand" placeholder="bijv. Hankook"></div>
+    <div><label for="model">Type/model</label><input id="model" placeholder="bijv. Ventus S1 evo3 ev"></div>
+    <div><label for="size">Maat</label><input id="size" placeholder="bijv. 235/50 R20"></div>
+    <div><label for="dot">DOT</label><input id="dot" placeholder="bijv. 12XE3 5E H0 0323" inputmode="text"></div>
+    <div><label for="prodWeek">Productieweek</label><input id="prodWeek" placeholder="03" inputmode="numeric"></div>
+    <div><label for="prodYear">Productiejaar</label><input id="prodYear" placeholder="2023" inputmode="numeric"></div>
+  </div>
+</section>
+
+<section class="card">
+  <label for="photo">📷 Foto band / zijwand</label>
+  <input id="photo" type="file" accept="image/*" capture="environment">
+  <img id="preview" class="photo hidden" alt="Geselecteerde foto van de band">
+  <button class="secondary" id="ocrBtn" style="width:100%;margin-top:10px" onclick="scanPhoto()">🔎 Herken gegevens uit foto</button>
+  <div id="ocrStatus" class="small" style="margin-top:8px"></div>
+  <div class="small" style="margin-top:8px">
+    Testversie: OCR draait in de browser via Tesseract.js. De OCR draait lokaal in de browser; er is geen OCR-server nodig. 
+    Omdat bandentekst gebogen en vaak laag-contrast is, moet de herkenning altijd worden gecontroleerd.
+  </div>
+</section>
+
+<section class="card">
+  <button class="primary" onclick="saveRecord()">＋ Band opslaan</button>
+  <div class="count" id="count"></div>
+</section>
+
+<section class="card">
+  <div class="row" style="margin-bottom:10px"><strong>Geregistreerde banden</strong><button class="secondary" onclick="exportCSV()">⬇︎ Excel/CSV</button></div>
+  <div style="overflow:auto"><table><thead><tr><th>Band-ID</th><th>Kenteken</th><th>Locatie</th><th>Rek/Vak</th><th>Voorraad</th><th>Merk</th><th>Type</th><th>Maat</th><th>Seizoen</th><th>DOT</th><th>Productie</th><th>Profiel</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="actions" style="margin-top:12px"><button class="secondary" onclick="clearAll()">Alles wissen</button><button class="secondary" onclick="shareCSV()">Delen</button></div>
+</section>
+</main>
+<div id="toast" class="toast"></div>
+<script>
+const KEY="bandenregistratie_v1";
+let records=JSON.parse(localStorage.getItem(KEY)||"[]");
+let photoData="";
+const $=id=>document.getElementById(id);
+$("photo").addEventListener("change",e=>{
+ const f=e.target.files[0]; if(!f)return;
+ const r=new FileReader(); r.onload=()=>{photoData=r.result;$("preview").src=photoData;$("preview").classList.remove("hidden")};r.readAsDataURL(f);
+});
+
+async function scanPhoto(){
+  const file=$("photo").files[0];
+  if(!file){toast("Maak eerst een foto van de band.");return}
+  if(!window.Tesseract){toast("OCR-library niet geladen. Open de app met internet en probeer opnieuw.");return}
+  $("ocrBtn").disabled=true;
+  $("ocrStatus").textContent="Foto voorbereiden…";
+  let worker=null;
+  try{
+    const img=await loadImage(file);
+    const canvas=document.createElement("canvas");
+    const max=1800, scale=Math.min(1,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
+    canvas.width=Math.round((img.naturalWidth||img.width)*scale);
+    canvas.height=Math.round((img.naturalHeight||img.height)*scale);
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    // Increase contrast/sharpness for embossed tyre lettering.
+    const d=ctx.getImageData(0,0,canvas.width,canvas.height);
+    for(let i=0;i<d.data.length;i+=4){
+      let y=.299*d.data[i]+.587*d.data[i+1]+.114*d.data[i+2];
+      y=(y-128)*1.45+128;
+      y=Math.max(0,Math.min(255,y));
+      d.data[i]=d.data[i+1]=d.data[i+2]=y;
+    }
+    ctx.putImageData(d,0,0);
+    $("ocrStatus").textContent="Tekst herkennen…";
+
+    worker=await Tesseract.createWorker("eng",1,{
+      logger:m=>{
+        if(m.status==="recognizing text" && typeof m.progress==="number")
+          $("ocrStatus").textContent="Tekst herkennen… "+Math.round(m.progress*100)+"%";
+      }
+    });
+    await worker.setParameters({
+      tessedit_pageseg_mode:"11",
+      preserve_interword_spaces:"1"
+    });
+    const result=await worker.recognize(canvas);
+    const text=(result.data.text||"").replace(/\s+/g," ").trim();
+    if(!text){
+      $("ocrStatus").textContent="Geen tekst gevonden. Maak een scherpere close-up.";
+      toast("Geen tekst herkend.");
+      return;
+    }
+    parseTireText(text);
+    $("ocrStatus").textContent="Klaar. Controleer de automatisch ingevulde velden.";
+  }catch(err){
+    console.error(err);
+    $("ocrStatus").textContent="OCR mislukt. Probeer opnieuw met een scherpere foto.";
+    toast("OCR mislukt.");
+  }finally{
+    if(worker){try{await worker.terminate()}catch(cleanupError){console.warn(cleanupError)}}
+    $("ocrBtn").disabled=false;
+  }
+}
+
+function loadImage(file){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
+    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("image"))};
+    img.src=url;
+  });
+}
+
+function parseTireText(text){
+  const upper=text.toUpperCase().replace(/[|]/g,"I");
+
+  // Full DOT/TIN with four-digit date code.
+  const dotFull=upper.match(/\bD[O0]T[\s:.-]*([A-Z0-9]{2,6}(?:\s+[A-Z0-9]{1,4}){0,4})[\s-]*([0-9]{4})\b/);
+  const dotDateOnly=upper.match(/\bD[O0]T[\s:.-]*([0-9]{4})\b/);
+  if(dotDateOnly && Number(dotDateOnly[1].slice(0,2))>=1 && Number(dotDateOnly[1].slice(0,2))<=53){
+    $("dot").value=dotDateOnly[1];
+    $("prodWeek").value=dotDateOnly[1].slice(0,2);
+    $("prodYear").value="20"+dotDateOnly[1].slice(2);
+  } else if(dotFull){
+    $("dot").value=(dotFull[1]+" "+dotFull[2]).replace(/\s+/g," ").trim();
+    $("prodWeek").value=dotFull[2].slice(0,2);
+    $("prodYear").value="20"+dotFull[2].slice(2);
+  } else {
+    const dateCodes=[...upper.matchAll(/\b([0-9]{4})\b/g)].map(x=>x[1]);
+    const valid=dateCodes.find(x=>Number(x.slice(0,2))>=1 && Number(x.slice(0,2))<=53);
+    if(valid){
+      $("prodWeek").value=valid.slice(0,2);
+      $("prodYear").value="20"+valid.slice(2);
+    }
+  }
+
+  // Common passenger-car sizes.
+  const s=upper.match(/\b(\d{3})\s*[\/-]\s*(\d{2})\s*(?:Z?R|R)\s*(\d{2})(?:\s*(\d{2,3})\s*([A-Z]))?\b/);
+  if(s){
+    $("size").value=`${s[1]}/${s[2]} R${s[3]}${s[4]&&s[5]?" "+s[4]+s[5]:""}`.trim();
+  }
+
+  const brands=[
+    ["MICHELIN","Michelin"],["CONTINENTAL","Continental"],["GOODYEAR","Goodyear"],
+    ["BRIDGESTONE","Bridgestone"],["PIRELLI","Pirelli"],["DUNLOP","Dunlop"],
+    ["HANKOOK","Hankook"],["YOKOHAMA","Yokohama"],["NOKIAN","Nokian"],
+    ["VREDESTEIN","Vredestein"],["FALKEN","Falken"],["TOYO","Toyo"],
+    ["KUMHO","Kumho"],["UNIROYAL","Uniroyal"],["BFGOODRICH","BFGoodrich"],
+    ["COOPER","Cooper"],["MAXXIS","Maxxis"],["BARUM","Barum"],["FULDA","Fulda"]
+  ];
+  const found=brands.find(([needle])=>upper.includes(needle));
+  if(found) $("brand").value=found[1];
+
+  const models=[
+    ["VENTUS S1 EVO3 EV","Ventus S1 evo3 ev"],["VENTUS S1 EVO3","Ventus S1 evo3"],
+    ["VENTUS S1 EVO2","Ventus S1 evo2"],["PILOT SPORT 5","Pilot Sport 5"],
+    ["PILOT SPORT 4","Pilot Sport 4"],["PRIMACY 5","Primacy 5"],["PRIMACY 4","Primacy 4"],
+    ["CROSSCLIMATE 2","CrossClimate 2"],["QUATRAC","Quatrac"],["WINTERCONTACT","WinterContact"],
+    ["BLIZZAK","Blizzak"],["TURANZA","Turanza"],["POTENZA","Potenza"]
+  ];
+  const model=models.find(([needle])=>upper.includes(needle));
+  if(model) $("model").value=model[1];
+
+  if(/\b(ALL[- ]?SEASON|4SEASON|CROSSCLIMATE|QUATRAC|ALL WEATHER)\b/.test(upper))
+    $("season").value="All-season";
+  else if(/\b(WINTER|WINTERCONTACT|WINTERSPORT|ALPIN|BLIZZAK|ICE|SNOW)\b/.test(upper))
+    $("season").value="Winter";
+  else if(/\b(SUMMER)\b/.test(upper))
+    $("season").value="Zomer";
+}
+
+function togglePlate(){
+  $("plateWrap").classList.toggle("hidden",$("stockType").value==="Vrije voorraad");
+}
+function saveRecord(){
+ const r={
+  id:"BAND-"+String(records.length+1).padStart(6,"0"),
+  voorraadtype:$("stockType").value,
+  kenteken:$("plate").value.trim().toUpperCase(),
+  positie:$("position").value,
+  seizoen:$("season").value,
+  locatie:$("location").value.trim(),
+  rek:$("shelf").value.trim(),
+  status:$("status").value,
+  setId:$("setId").value.trim().toUpperCase(),
+  merk:$("brand").value.trim(),
+  type:$("model").value.trim(),
+  maat:$("size").value.trim().toUpperCase(),
+  dot:$("dot").value.trim().toUpperCase(),
+  productieweek:$("prodWeek").value.trim(),
+  productiejaar:$("prodYear").value.trim(),
+  profiel:$("tread").value.trim().replace(",","."),
+  tijd:new Date().toISOString()
+ };
+ if(r.voorraadtype==="Aan voertuig gekoppeld" && !r.kenteken){toast("Vul het kenteken in.");return}
+ if(!r.merk||!r.maat||!r.dot||!r.profiel){toast("Vul merk, maat, DOT en profiel in.");return}
+ records.push(r);localStorage.setItem(KEY,JSON.stringify(records));render();
+ ["brand","model","size","dot","prodWeek","prodYear","tread","location","shelf","setId","plate"].forEach(id=>$(id).value="");
+ $("stockType").value="Vrije voorraad"; $("status").value="Vrije voorraad"; $("position").value="—"; togglePlate();
+ $("photo").value="";$("preview").classList.add("hidden");photoData="";
+ toast("Band opgeslagen ✓");
+}
+function render(){
+ $("rows").innerHTML=records.map(r=>`<tr><td>${esc(r.id)}</td><td>${esc(r.kenteken||"—")}</td><td>${esc(r.locatie||"—")}</td><td>${esc(r.rek||"—")}</td><td>${esc(r.voorraadtype)}</td><td>${esc(r.merk)}</td><td>${esc(r.type||"—")}</td><td>${esc(r.maat)}</td><td>${esc(r.seizoen)}</td><td>${esc(r.dot)}</td><td>${esc(r.productieweek||"—")}/${esc(r.productiejaar||"—")}</td><td>${esc(r.profiel)} mm</td><td>${esc(r.status)}</td></tr>`).join("");
+ $("count").textContent=records.length+" band"+(records.length===1?"":"en")+" geregistreerd";
+}
+function csv(){
+ const head=["Band-ID","Voorraadtype","Kenteken","Positie","Seizoen","Locatie","Rek/Vak","Status","Set-ID","Merk","Type","Maat","DOT","Productieweek","Productiejaar","Profiel (mm)","Datum"];
+ const lines=[head,...records.map(r=>[r.id,r.voorraadtype,r.kenteken,r.positie,r.seizoen,r.locatie,r.rek,r.status,r.setId,r.merk,r.type,r.maat,r.dot,r.productieweek,r.productiejaar,r.profiel,new Date(r.tijd).toLocaleString("nl-NL")])];
+ return "\ufeff"+lines.map(row=>row.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(";")).join("\r\n");
+}
+function exportCSV(){
+ if(!records.length){toast("Nog geen banden geregistreerd.");return}
+ const blob=new Blob([csv()],{type:"text/csv;charset=utf-8"});
+ const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="bandenregistratie.csv";a.click();
+}
+async function shareCSV(){
+ if(!records.length){toast("Nog geen banden geregistreerd.");return}
+ const file=new File([csv()],"bandenregistratie.csv",{type:"text/csv"});
+ if(navigator.share){try{await navigator.share({files:[file],title:"Bandenregistratie"});return}catch(e){}}
+ exportCSV();
+}
+function clearAll(){if(confirm("Alle geregistreerde banden wissen?")){records=[];localStorage.setItem(KEY,"[]");render();}}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",1800)}
+togglePlate();
+render();
+</script>
+</body></html>
