@@ -35,7 +35,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;p
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
-<header><h1>🛞 Bandenregistratie</h1><div class="sub">v4.1 webapp &middot; DOT · merk · maat · kenteken · profiel</div></header>
+<header><h1>🛞 Bandenregistratie</h1><div class="sub">v4.2 scan verbeterd &middot; DOT · merk · maat · kenteken · profiel</div></header>
 <main>
 <section class="card small" role="note">
   <strong>Testversie: opslag op dit apparaat.</strong>
@@ -73,6 +73,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;p
   <img id="preview" class="photo hidden" alt="Geselecteerde foto van de band">
   <button class="secondary" id="ocrBtn" style="width:100%;margin-top:10px" onclick="scanPhoto()">🔎 Herken gegevens uit foto</button>
   <div id="ocrStatus" class="small" style="margin-top:8px"></div>
+  <details id="ocrDetails" class="small" style="margin-top:8px"><summary>Herkende tekst bekijken</summary><pre id="ocrRaw" style="white-space:pre-wrap;word-break:break-word;background:#f9fafb;padding:10px;border-radius:10px;border:1px solid #e5e7eb"></pre></details>
   <div class="small" style="margin-top:8px">
     Testversie: OCR draait in de browser via Tesseract.js. De OCR draait lokaal in de browser; er is geen OCR-server nodig. 
     Omdat bandentekst gebogen en vaak laag-contrast is, moet de herkenning altijd worden gecontroleerd.
@@ -104,23 +105,26 @@ $("photo").addEventListener("change",e=>{
 async function scanPhoto(){
   const file=$("photo").files[0];
   if(!file){toast("Maak eerst een foto van de band.");return}
-  if(!window.Tesseract){toast("OCR-library niet geladen. Open de app met internet en probeer opnieuw.");return}
+  if(!window.Tesseract){toast("OCR-library niet geladen. Controleer internet en open de app opnieuw.");return}
   $("ocrBtn").disabled=true;
   $("ocrStatus").textContent="Foto voorbereiden…";
+  $("ocrRaw").textContent="";
   let worker=null;
   try{
     const img=await loadImage(file);
     const canvas=document.createElement("canvas");
-    const max=1800, scale=Math.min(1,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
-    canvas.width=Math.round((img.naturalWidth||img.width)*scale);
-    canvas.height=Math.round((img.naturalHeight||img.height)*scale);
+    // Keep more detail: tyre lettering is often small and embossed.
+    const max=2600, scale=Math.min(1,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
+    canvas.width=Math.max(1,Math.round((img.naturalWidth||img.width)*scale));
+    canvas.height=Math.max(1,Math.round((img.naturalHeight||img.height)*scale));
     const ctx=canvas.getContext("2d",{willReadFrequently:true});
     ctx.drawImage(img,0,0,canvas.width,canvas.height);
-    // Increase contrast/sharpness for embossed tyre lettering.
+
+    // Grayscale + stronger local contrast for embossed sidewall text.
     const d=ctx.getImageData(0,0,canvas.width,canvas.height);
     for(let i=0;i<d.data.length;i+=4){
       let y=.299*d.data[i]+.587*d.data[i+1]+.114*d.data[i+2];
-      y=(y-128)*1.45+128;
+      y=(y-128)*1.8+128;
       y=Math.max(0,Math.min(255,y));
       d.data[i]=d.data[i+1]=d.data[i+2]=y;
     }
@@ -138,24 +142,32 @@ async function scanPhoto(){
       preserve_interword_spaces:"1"
     });
     const result=await worker.recognize(canvas);
-    const text=(result.data.text||"").replace(/\s+/g," ").trim();
+    const raw=(result.data.text||"").trim();
+    const text=raw.replace(/\s+/g," ").trim();
+    $("ocrRaw").textContent=raw || "(geen tekst herkend)";
     if(!text){
-      $("ocrStatus").textContent="Geen tekst gevonden. Maak een scherpere close-up.";
+      $("ocrStatus").textContent="Geen tekst gevonden. Maak een close-up loodrecht op de zijwand.";
       toast("Geen tekst herkend.");
       return;
     }
-    parseTireText(text);
-    $("ocrStatus").textContent="Klaar. Controleer de automatisch ingevulde velden.";
+    const filled=parseTireText(text);
+    if(filled>0){
+      $("ocrStatus").textContent=`Klaar: ${filled} veld${filled===1?"":"en"} ingevuld. Controleer de gegevens.`;
+      toast(`${filled} veld${filled===1?"":"en"} herkend.`);
+    }else{
+      $("ocrStatus").textContent="Wel tekst herkend, maar geen bandgegevens gevonden. Open ‘Herkende tekst bekijken’.";
+      $("ocrDetails").open=true;
+      toast("Tekst gelezen, geen velden herkend.");
+    }
   }catch(err){
     console.error(err);
-    $("ocrStatus").textContent="OCR mislukt. Probeer opnieuw met een scherpere foto.";
+    $("ocrStatus").textContent="OCR mislukt: "+(err&&err.message?err.message:"onbekende fout");
     toast("OCR mislukt.");
   }finally{
     if(worker){try{await worker.terminate()}catch(cleanupError){console.warn(cleanupError)}}
     $("ocrBtn").disabled=false;
   }
 }
-
 function loadImage(file){
   return new Promise((resolve,reject)=>{
     const url=URL.createObjectURL(file);
@@ -167,32 +179,41 @@ function loadImage(file){
 }
 
 function parseTireText(text){
-  const upper=text.toUpperCase().replace(/[|]/g,"I");
+  let filled=0;
+  const set=(id,value)=>{if(value && !$(id).value){$(id).value=value;filled++}};
+  let upper=text.toUpperCase().replace(/[|]/g,"I");
+  // Normalize frequent OCR mistakes only where they help tyre markings.
+  const compact=upper.replace(/[\n\r]+/g," ").replace(/\s+/g," ");
 
-  // Full DOT/TIN with four-digit date code.
-  const dotFull=upper.match(/\bD[O0]T[\s:.-]*([A-Z0-9]{2,6}(?:\s+[A-Z0-9]{1,4}){0,4})[\s-]*([0-9]{4})\b/);
-  const dotDateOnly=upper.match(/\bD[O0]T[\s:.-]*([0-9]{4})\b/);
-  if(dotDateOnly && Number(dotDateOnly[1].slice(0,2))>=1 && Number(dotDateOnly[1].slice(0,2))<=53){
-    $("dot").value=dotDateOnly[1];
-    $("prodWeek").value=dotDateOnly[1].slice(0,2);
-    $("prodYear").value="20"+dotDateOnly[1].slice(2);
-  } else if(dotFull){
-    $("dot").value=(dotFull[1]+" "+dotFull[2]).replace(/\s+/g," ").trim();
-    $("prodWeek").value=dotFull[2].slice(0,2);
-    $("prodYear").value="20"+dotFull[2].slice(2);
-  } else {
-    const dateCodes=[...upper.matchAll(/\b([0-9]{4})\b/g)].map(x=>x[1]);
-    const valid=dateCodes.find(x=>Number(x.slice(0,2))>=1 && Number(x.slice(0,2))<=53);
-    if(valid){
-      $("prodWeek").value=valid.slice(0,2);
-      $("prodYear").value="20"+valid.slice(2);
+  // Size: accepts 235/50 R20, 235 50 R20, 235-50R20 and OCR variants such as R2O.
+  const sizeText=compact.replace(/(?<=\d)O(?=\d)/g,"0");
+  const sizePatterns=[
+    /\b(\d{3})\s*[\/-]\s*(\d{2})\s*(?:Z?R)\s*([12][0-9])(?:\s*(\d{2,3})\s*([A-Z]))?\b/,
+    /\b(\d{3})\s+(\d{2})\s+(?:Z?R)\s*([12][0-9])(?:\s*(\d{2,3})\s*([A-Z]))?\b/
+  ];
+  let sm=null;
+  for(const re of sizePatterns){sm=sizeText.match(re);if(sm)break}
+  if(sm) set("size",`${sm[1]}/${sm[2]} R${sm[3]}${sm[4]&&sm[5]?" "+sm[4]+sm[5]:""}`.trim());
+
+  // DOT: prefer a 4-digit week/year code near DOT, but also accept parenthesized date codes.
+  const dotNorm=compact.replace(/D[O0Q]T/g,"DOT");
+  let dm=dotNorm.match(/\bDOT\b[\s:._-]*([A-Z0-9 ]{0,24}?)(?:\(|\s|^)([0-5][0-9][0-3][0-9])\)?\b/);
+  if(!dm) dm=dotNorm.match(/\bDOT[\s:._-]*([0-5][0-9][0-3][0-9])\b/);
+  let dateCode=null;
+  if(dm){
+    dateCode=dm[2]||dm[1];
+    const prefix=dm[2]?(dm[1]||"").trim():"";
+    const week=Number(dateCode.slice(0,2));
+    if(week>=1 && week<=53){
+      set("dot",(prefix?prefix+" ":"")+dateCode);
+      set("prodWeek",dateCode.slice(0,2));
+      set("prodYear","20"+dateCode.slice(2));
     }
   }
-
-  // Common passenger-car sizes.
-  const s=upper.match(/\b(\d{3})\s*[\/-]\s*(\d{2})\s*(?:Z?R|R)\s*(\d{2})(?:\s*(\d{2,3})\s*([A-Z]))?\b/);
-  if(s){
-    $("size").value=`${s[1]}/${s[2]} R${s[3]}${s[4]&&s[5]?" "+s[4]+s[5]:""}`.trim();
+  if(!dateCode){
+    const candidates=[...dotNorm.matchAll(/(?:\(|\b)([0-5][0-9][0-3][0-9])(?:\)|\b)/g)].map(m=>m[1]);
+    const valid=candidates.find(x=>Number(x.slice(0,2))>=1 && Number(x.slice(0,2))<=53);
+    if(valid){set("dot",valid);set("prodWeek",valid.slice(0,2));set("prodYear","20"+valid.slice(2));}
   }
 
   const brands=[
@@ -203,8 +224,10 @@ function parseTireText(text){
     ["KUMHO","Kumho"],["UNIROYAL","Uniroyal"],["BFGOODRICH","BFGoodrich"],
     ["COOPER","Cooper"],["MAXXIS","Maxxis"],["BARUM","Barum"],["FULDA","Fulda"]
   ];
-  const found=brands.find(([needle])=>upper.includes(needle));
-  if(found) $("brand").value=found[1];
+  // Also compare a letters-only form; this tolerates spaces/punctuation inserted by OCR.
+  const letters=compact.replace(/[^A-Z]/g,"");
+  const found=brands.find(([needle])=>compact.includes(needle)||letters.includes(needle.replace(/[^A-Z]/g,"")));
+  if(found) set("brand",found[1]);
 
   const models=[
     ["VENTUS S1 EVO3 EV","Ventus S1 evo3 ev"],["VENTUS S1 EVO3","Ventus S1 evo3"],
@@ -213,17 +236,15 @@ function parseTireText(text){
     ["CROSSCLIMATE 2","CrossClimate 2"],["QUATRAC","Quatrac"],["WINTERCONTACT","WinterContact"],
     ["BLIZZAK","Blizzak"],["TURANZA","Turanza"],["POTENZA","Potenza"]
   ];
-  const model=models.find(([needle])=>upper.includes(needle));
-  if(model) $("model").value=model[1];
+  const model=models.find(([needle])=>compact.includes(needle));
+  if(model) set("model",model[1]);
 
-  if(/\b(ALL[- ]?SEASON|4SEASON|CROSSCLIMATE|QUATRAC|ALL WEATHER)\b/.test(upper))
-    $("season").value="All-season";
-  else if(/\b(WINTER|WINTERCONTACT|WINTERSPORT|ALPIN|BLIZZAK|ICE|SNOW)\b/.test(upper))
-    $("season").value="Winter";
-  else if(/\b(SUMMER)\b/.test(upper))
-    $("season").value="Zomer";
+  if(/\b(ALL[- ]?SEASON|4SEASON|CROSSCLIMATE|QUATRAC|ALL WEATHER)\b/.test(compact)) set("season","All-season");
+  else if(/\b(WINTER|WINTERCONTACT|WINTERSPORT|ALPIN|BLIZZAK|ICE|SNOW)\b/.test(compact)) set("season","Winter");
+  else if(/\b(SUMMER)\b/.test(compact)) set("season","Zomer");
+
+  return filled;
 }
-
 function togglePlate(){
   $("plateWrap").classList.toggle("hidden",$("stockType").value==="Vrije voorraad");
 }
