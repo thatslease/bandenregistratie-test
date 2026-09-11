@@ -35,7 +35,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;p
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
-<header><h1>🛞 Bandenregistratie</h1><div class="sub">v4.2 scan verbeterd &middot; DOT · merk · maat · kenteken · profiel</div></header>
+<header><h1>🛞 Bandenregistratie</h1><div class="sub">v4.3 scan robuuster &middot; DOT · merk · maat · kenteken · profiel</div></header>
 <main>
 <section class="card small" role="note">
   <strong>Testversie: opslag op dit apparaat.</strong>
@@ -112,138 +112,116 @@ async function scanPhoto(){
   let worker=null;
   try{
     const img=await loadImage(file);
-    const canvas=document.createElement("canvas");
-    // Keep more detail: tyre lettering is often small and embossed.
-    const max=2600, scale=Math.min(1,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
-    canvas.width=Math.max(1,Math.round((img.naturalWidth||img.width)*scale));
-    canvas.height=Math.max(1,Math.round((img.naturalHeight||img.height)*scale));
-    const ctx=canvas.getContext("2d",{willReadFrequently:true});
-    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    const base=document.createElement("canvas");
+    const max=3000, scale=Math.min(1.35,max/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));
+    base.width=Math.max(1,Math.round((img.naturalWidth||img.width)*scale));
+    base.height=Math.max(1,Math.round((img.naturalHeight||img.height)*scale));
+    const bctx=base.getContext("2d",{willReadFrequently:true});
+    bctx.drawImage(img,0,0,base.width,base.height);
 
-    // Grayscale + stronger local contrast for embossed sidewall text.
-    const d=ctx.getImageData(0,0,canvas.width,canvas.height);
-    for(let i=0;i<d.data.length;i+=4){
-      let y=.299*d.data[i]+.587*d.data[i+1]+.114*d.data[i+2];
-      y=(y-128)*1.8+128;
-      y=Math.max(0,Math.min(255,y));
-      d.data[i]=d.data[i+1]=d.data[i+2]=y;
-    }
-    ctx.putImageData(d,0,0);
-    $("ocrStatus").textContent="Tekst herkennen…";
-
-    worker=await Tesseract.createWorker("eng",1,{
-      logger:m=>{
-        if(m.status==="recognizing text" && typeof m.progress==="number")
-          $("ocrStatus").textContent="Tekst herkennen… "+Math.round(m.progress*100)+"%";
+    const variants=[];
+    variants.push({name:"origineel",canvas:base});
+    const makeVariant=(name,mode)=>{
+      const c=document.createElement("canvas"); c.width=base.width;c.height=base.height;
+      const ctx=c.getContext("2d",{willReadFrequently:true});ctx.drawImage(base,0,0);
+      const d=ctx.getImageData(0,0,c.width,c.height);
+      for(let i=0;i<d.data.length;i+=4){
+        let y=.299*d.data[i]+.587*d.data[i+1]+.114*d.data[i+2];
+        if(mode==="contrast") y=(y-128)*2.15+128;
+        if(mode==="threshold") y=y>145?255:0;
+        y=Math.max(0,Math.min(255,y));
+        d.data[i]=d.data[i+1]=d.data[i+2]=y;
       }
-    });
-    await worker.setParameters({
-      tessedit_pageseg_mode:"11",
-      preserve_interword_spaces:"1"
-    });
-    const result=await worker.recognize(canvas);
-    const raw=(result.data.text||"").trim();
-    const text=raw.replace(/\s+/g," ").trim();
-    $("ocrRaw").textContent=raw || "(geen tekst herkend)";
-    if(!text){
-      $("ocrStatus").textContent="Geen tekst gevonden. Maak een close-up loodrecht op de zijwand.";
-      toast("Geen tekst herkend.");
-      return;
-    }
-    const filled=parseTireText(text);
-    if(filled>0){
-      $("ocrStatus").textContent=`Klaar: ${filled} veld${filled===1?"":"en"} ingevuld. Controleer de gegevens.`;
-      toast(`${filled} veld${filled===1?"":"en"} herkend.`);
-    }else{
-      $("ocrStatus").textContent="Wel tekst herkend, maar geen bandgegevens gevonden. Open ‘Herkende tekst bekijken’.";
-      $("ocrDetails").open=true;
-      toast("Tekst gelezen, geen velden herkend.");
-    }
-  }catch(err){
-    console.error(err);
-    $("ocrStatus").textContent="OCR mislukt: "+(err&&err.message?err.message:"onbekende fout");
-    toast("OCR mislukt.");
-  }finally{
-    if(worker){try{await worker.terminate()}catch(cleanupError){console.warn(cleanupError)}}
-    $("ocrBtn").disabled=false;
-  }
-}
-function loadImage(file){
-  return new Promise((resolve,reject)=>{
-    const url=URL.createObjectURL(file);
-    const img=new Image();
-    img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};
-    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("image"))};
-    img.src=url;
-  });
-}
+      ctx.putImageData(d,0,0); return {name,canvas:c};
+    };
+    variants.push(makeVariant("hoog contrast","contrast"));
+    variants.push(makeVariant("zwart/wit","threshold"));
 
+    worker=await Tesseract.createWorker("eng",1,{logger:m=>{
+      if(m.status==="recognizing text" && typeof m.progress==="number")
+        $("ocrStatus").textContent="Tekst herkennen… "+Math.round(m.progress*100)+"%";
+    }});
+    await worker.setParameters({tessedit_pageseg_mode:"11",preserve_interword_spaces:"1"});
+
+    let chunks=[];
+    for(let i=0;i<variants.length;i++){
+      $("ocrStatus").textContent=`Tekst herkennen… ${i+1}/${variants.length}`;
+      const result=await worker.recognize(variants[i].canvas);
+      const raw=(result.data.text||"").trim();
+      if(raw) chunks.push(`--- ${variants[i].name} ---\n${raw}`);
+    }
+    const raw=chunks.join("\n\n");
+    const text=raw.replace(/---[^\n]+---/g," ").replace(/\s+/g," ").trim();
+    $("ocrRaw").textContent=raw || "(geen tekst herkend)";
+    if(!text){$("ocrStatus").textContent="Geen tekst gevonden. Maak een close-up loodrecht op de zijwand.";toast("Geen tekst herkend.");return}
+    const result=parseTireText(text);
+    if(result.filled>0){
+      $("ocrStatus").textContent=`Klaar: ${result.filled} veld${result.filled===1?"":"en"} ingevuld. Controleer de gegevens.`;
+      toast(`${result.filled} veld${result.filled===1?"":"en"} herkend.`);
+    }else{
+      $("ocrStatus").textContent="Wel tekst herkend, maar geen zekere bandgegevens gevonden. De ruwe OCR-tekst staat hieronder.";
+      $("ocrDetails").open=true;toast("Tekst gelezen, geen velden herkend.");
+    }
+  }catch(err){console.error(err);$("ocrStatus").textContent="OCR mislukt: "+(err&&err.message?err.message:"onbekende fout");toast("OCR mislukt.");}
+  finally{if(worker){try{await worker.terminate()}catch(e){console.warn(e)}}$("ocrBtn").disabled=false;}
+}
+function loadImage(file){return new Promise((resolve,reject)=>{const url=URL.createObjectURL(file);const img=new Image();img.onload=()=>{URL.revokeObjectURL(url);resolve(img)};img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("image"))};img.src=url;});}
+
+function editDistance(a,b){
+  const dp=Array.from({length:a.length+1},()=>Array(b.length+1).fill(0));
+  for(let i=0;i<=a.length;i++)dp[i][0]=i;for(let j=0;j<=b.length;j++)dp[0][j]=j;
+  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)dp[i][j]=Math.min(dp[i-1][j]+1,dp[i][j-1]+1,dp[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+  return dp[a.length][b.length];
+}
+function digitish(s){return s.toUpperCase().replace(/[OQD]/g,"0").replace(/[IL|]/g,"1").replace(/Z/g,"2").replace(/S/g,"5").replace(/G/g,"6").replace(/B/g,"8").replace(/[^0-9]/g,"");}
 function parseTireText(text){
   let filled=0;
-  const set=(id,value)=>{if(value && !$(id).value){$(id).value=value;filled++}};
-  let upper=text.toUpperCase().replace(/[|]/g,"I");
-  // Normalize frequent OCR mistakes only where they help tyre markings.
+  const set=(id,value,force=false)=>{if(value && (force || !$(id).value)){ $(id).value=value;filled++; }};
+  const upper=text.toUpperCase().replace(/[|]/g,"I");
   const compact=upper.replace(/[\n\r]+/g," ").replace(/\s+/g," ");
 
-  // Size: accepts 235/50 R20, 235 50 R20, 235-50R20 and OCR variants such as R2O.
-  const sizeText=compact.replace(/(?<=\d)O(?=\d)/g,"0");
-  const sizePatterns=[
-    /\b(\d{3})\s*[\/-]\s*(\d{2})\s*(?:Z?R)\s*([12][0-9])(?:\s*(\d{2,3})\s*([A-Z]))?\b/,
-    /\b(\d{3})\s+(\d{2})\s+(?:Z?R)\s*([12][0-9])(?:\s*(\d{2,3})\s*([A-Z]))?\b/
-  ];
-  let sm=null;
-  for(const re of sizePatterns){sm=sizeText.match(re);if(sm)break}
-  if(sm) set("size",`${sm[1]}/${sm[2]} R${sm[3]}${sm[4]&&sm[5]?" "+sm[4]+sm[5]:""}`.trim());
-
-  // DOT: prefer a 4-digit week/year code near DOT, but also accept parenthesized date codes.
-  const dotNorm=compact.replace(/D[O0Q]T/g,"DOT");
-  let dm=dotNorm.match(/\bDOT\b[\s:._-]*([A-Z0-9 ]{0,24}?)(?:\(|\s|^)([0-5][0-9][0-3][0-9])\)?\b/);
-  if(!dm) dm=dotNorm.match(/\bDOT[\s:._-]*([0-5][0-9][0-3][0-9])\b/);
-  let dateCode=null;
-  if(dm){
-    dateCode=dm[2]||dm[1];
-    const prefix=dm[2]?(dm[1]||"").trim():"";
-    const week=Number(dateCode.slice(0,2));
-    if(week>=1 && week<=53){
-      set("dot",(prefix?prefix+" ":"")+dateCode);
-      set("prodWeek",dateCode.slice(0,2));
-      set("prodYear","20"+dateCode.slice(2));
+  // Tyre size: tolerate OCR substitutions in all numeric groups and separators.
+  const tokens=compact.replace(/[()\[\],;:]/g," ").split(/\s+/).filter(Boolean);
+  let sizeFound=null;
+  for(let i=0;i<tokens.length;i++){
+    const window=tokens.slice(i,i+6).join(" ");
+    const m=window.match(/([0-9OQDISBZG]{3})\s*[\/\\\- ]\s*([0-9OQDISBZG]{2})\s*(?:Z?R|[RPK])?\s*([0-9OQDISBZG]{2})(?:\s*([0-9OQDISBZG]{2,3})\s*([A-Z]))?/);
+    if(m){
+      const w=digitish(m[1]), ar=digitish(m[2]), rim=digitish(m[3]);
+      if(w.length===3 && ar.length===2 && rim.length===2 && +w>=125 && +w<=395 && +ar>=20 && +ar<=85 && +rim>=10 && +rim<=26){
+        sizeFound=`${w}/${ar} R${rim}`;break;
+      }
     }
   }
-  if(!dateCode){
-    const candidates=[...dotNorm.matchAll(/(?:\(|\b)([0-5][0-9][0-3][0-9])(?:\)|\b)/g)].map(m=>m[1]);
-    const valid=candidates.find(x=>Number(x.slice(0,2))>=1 && Number(x.slice(0,2))<=53);
-    if(valid){set("dot",valid);set("prodWeek",valid.slice(0,2));set("prodYear","20"+valid.slice(2));}
+  if(sizeFound)set("size",sizeFound);
+
+  // DOT date: inspect 4-character OCR-like chunks and prefer candidates near DOT.
+  const dotPos=compact.search(/D[O0Q]T/);
+  const rawCandidates=[...compact.matchAll(/\b[0-9OQILSZBG]{4}\b/g)].map(m=>({raw:m[0],idx:m.index||0,num:digitish(m[0])}));
+  const valid=rawCandidates.filter(c=>c.num.length===4 && +c.num.slice(0,2)>=1 && +c.num.slice(0,2)<=53 && +c.num.slice(2)>=0 && +c.num.slice(2)<=39);
+  if(valid.length){
+    valid.sort((a,b)=>{const da=dotPos>=0?Math.abs(a.idx-dotPos):99999,db=dotPos>=0?Math.abs(b.idx-dotPos):99999;return da-db;});
+    const dc=valid[0].num;set("dot",dc);set("prodWeek",dc.slice(0,2));set("prodYear","20"+dc.slice(2));
   }
 
-  const brands=[
-    ["MICHELIN","Michelin"],["CONTINENTAL","Continental"],["GOODYEAR","Goodyear"],
-    ["BRIDGESTONE","Bridgestone"],["PIRELLI","Pirelli"],["DUNLOP","Dunlop"],
-    ["HANKOOK","Hankook"],["YOKOHAMA","Yokohama"],["NOKIAN","Nokian"],
-    ["VREDESTEIN","Vredestein"],["FALKEN","Falken"],["TOYO","Toyo"],
-    ["KUMHO","Kumho"],["UNIROYAL","Uniroyal"],["BFGOODRICH","BFGoodrich"],
-    ["COOPER","Cooper"],["MAXXIS","Maxxis"],["BARUM","Barum"],["FULDA","Fulda"]
-  ];
-  // Also compare a letters-only form; this tolerates spaces/punctuation inserted by OCR.
-  const letters=compact.replace(/[^A-Z]/g,"");
-  const found=brands.find(([needle])=>compact.includes(needle)||letters.includes(needle.replace(/[^A-Z]/g,"")));
-  if(found) set("brand",found[1]);
+  const brands=[["MICHELIN","Michelin"],["CONTINENTAL","Continental"],["GOODYEAR","Goodyear"],["BRIDGESTONE","Bridgestone"],["PIRELLI","Pirelli"],["DUNLOP","Dunlop"],["HANKOOK","Hankook"],["YOKOHAMA","Yokohama"],["NOKIAN","Nokian"],["VREDESTEIN","Vredestein"],["FALKEN","Falken"],["TOYO","Toyo"],["KUMHO","Kumho"],["UNIROYAL","Uniroyal"],["BFGOODRICH","BFGoodrich"],["COOPER","Cooper"],["MAXXIS","Maxxis"],["BARUM","Barum"],["FULDA","Fulda"]];
+  const words=compact.replace(/[^A-Z0-9 ]/g," ").split(/\s+/).filter(Boolean);
+  let best=null;
+  for(const [needle,label] of brands){
+    if(compact.includes(needle)){best={label,d:0};break}
+    for(const w of words){if(Math.abs(w.length-needle.length)<=2){const d=editDistance(w,needle);if(d<=2 && (!best||d<best.d))best={label,d};}}
+  }
+  if(best)set("brand",best.label);
 
-  const models=[
-    ["VENTUS S1 EVO3 EV","Ventus S1 evo3 ev"],["VENTUS S1 EVO3","Ventus S1 evo3"],
-    ["VENTUS S1 EVO2","Ventus S1 evo2"],["PILOT SPORT 5","Pilot Sport 5"],
-    ["PILOT SPORT 4","Pilot Sport 4"],["PRIMACY 5","Primacy 5"],["PRIMACY 4","Primacy 4"],
-    ["CROSSCLIMATE 2","CrossClimate 2"],["QUATRAC","Quatrac"],["WINTERCONTACT","WinterContact"],
-    ["BLIZZAK","Blizzak"],["TURANZA","Turanza"],["POTENZA","Potenza"]
-  ];
-  const model=models.find(([needle])=>compact.includes(needle));
-  if(model) set("model",model[1]);
+  const modelRules=[[/(VENTUS\s*S1\s*EVO\s*3|VENTUS\s*S1\s*EVO3)/,"Ventus S1 evo3"],[/VENTUS/,"Ventus"],[/PILOT\s*SPORT\s*5/,"Pilot Sport 5"],[/PILOT\s*SPORT\s*4/,"Pilot Sport 4"],[/PRIMACY\s*5/,"Primacy 5"],[/PRIMACY\s*4/,"Primacy 4"],[/CROSSCLIMATE\s*2/,"CrossClimate 2"],[/CROSSCLIMATE/,"CrossClimate"],[/QUATRAC/,"Quatrac"],[/WINTERCONTACT/,"WinterContact"],[/BLIZZAK/,"Blizzak"],[/TURANZA/,"Turanza"],[/POTENZA/,"Potenza"]];
+  for(const [re,label] of modelRules){if(re.test(compact)){set("model",label);break}}
 
-  if(/\b(ALL[- ]?SEASON|4SEASON|CROSSCLIMATE|QUATRAC|ALL WEATHER)\b/.test(compact)) set("season","All-season");
-  else if(/\b(WINTER|WINTERCONTACT|WINTERSPORT|ALPIN|BLIZZAK|ICE|SNOW)\b/.test(compact)) set("season","Winter");
-  else if(/\b(SUMMER)\b/.test(compact)) set("season","Zomer");
+  // Select fields have defaults, so overwrite them only when season evidence is explicit.
+  if(/\b(ALL[- ]?SEASON|4SEASON|CROSSCLIMATE|QUATRAC|ALL WEATHER|M\+S|M&S)\b/.test(compact)) set("season","All-season",true);
+  else if(/\b(WINTER|WINTERCONTACT|WINTERSPORT|ALPIN|BLIZZAK|ICE|SNOW)\b/.test(compact)) set("season","Winter",true);
+  else if(/\bSUMMER\b/.test(compact)) set("season","Zomer",true);
 
-  return filled;
+  return {filled};
 }
 function togglePlate(){
   $("plateWrap").classList.toggle("hidden",$("stockType").value==="Vrije voorraad");
